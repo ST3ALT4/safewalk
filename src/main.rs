@@ -5,7 +5,7 @@ use axum::{routing::{get, post}, Router, Json, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use petgraph::algo::astar;
-use tower_http::cors::CorsLayer; // Enabled for detached UI testing
+use tower_http::cors::CorsLayer;
 use crate::graph::NavigationGraph;
 use crate::safety::SafetyMap;
 
@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(|| async { "OK" }))
         .route("/route", post(calculate_route))
-        .layer(cors) // Apply CORS
+        .layer(cors)
         .with_state(shared_state);
 
     println!("🚀 API Server running on http://0.0.0.0:3000");

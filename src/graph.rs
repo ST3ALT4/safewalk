@@ -19,7 +19,6 @@ pub struct WalkEdge {
 
 pub struct NavigationGraph {
     pub graph: Graph<GeoNode, WalkEdge>,
-    pub _osm_id_map: HashMap<i64, NodeIndex>
 }
 
 impl NavigationGraph {
@@ -30,7 +29,7 @@ impl NavigationGraph {
         let mut osm_id_map = HashMap::new();
         let mut temp_nodes = HashMap::new(); 
 
-        // PASS 1: Store all Nodes (Standard + Dense)
+        // PASS 1: Nodes
         let reader = ElementReader::from_path(path)?;
         let mut node_count = 0;
 
@@ -50,22 +49,19 @@ impl NavigationGraph {
 
         println!("Loaded {} nodes. Building Edges...", node_count);        
         
-        // PASS 2: Build Ways
+        // PASS 2: Ways
         let reader_pass2 = ElementReader::from_path(path)?;
         reader_pass2.for_each(|element| {
             if let Element::Way(way) = element {
-                let mut highway = "";
-                let mut foot = "";
-                let mut sidewalk = "";
-
+                
+                let mut tags = HashMap::new();
                 for (key, value) in way.tags() {
-                    match key {
-                        "highway" => highway = value,
-                        "foot" => foot = value,
-                        "sidewalk" => sidewalk = value,
-                        _ => {}
-                    }
+                    tags.insert(key, value);
                 }
+
+                let highway = tags.get("highway").copied().unwrap_or("");
+                let foot = tags.get("foot").copied().unwrap_or("");
+                let sidewalk = tags.get("sidewalk").copied().unwrap_or("");
 
                 let is_walkable_type = matches!(highway, 
                     "footway" | "path" | "steps" | "pedestrian" | "living_street" | 
@@ -76,9 +72,9 @@ impl NavigationGraph {
                 let foot_allowed = matches!(foot, "yes" | "designated" | "permissive");
                 let has_sidewalk = matches!(sidewalk, "both" | "left" | "right" | "yes" | "separate");
 
-                let is_walkable = is_walkable_type || (is_motor_road && (foot_allowed || has_sidewalk));
+                if is_walkable_type || (is_motor_road && (foot_allowed || has_sidewalk)) {
+                    let risk_score = safety_map.calculate_edge_risk(&tags);
 
-                if is_walkable {
                     let refs: Vec<i64> = way.refs().collect();
                     
                     for window in refs.windows(2) {
@@ -98,16 +94,11 @@ impl NavigationGraph {
                             let p2 = Point::new(lon_b, lat_b);
                             let dist = p1.haversine_distance(&p2);
                             
-                            let safety_a = safety_map.get_risk_score(lat_a, lon_a);
-                            let safety_b = safety_map.get_risk_score(lat_b, lon_b);
-                            let avg_safety = (safety_a + safety_b) / 2.0;
-
                             let edge_data = WalkEdge {
                                 distance_meters: dist,
-                                safety_score: avg_safety,
+                                safety_score: risk_score,
                             };
 
-                            // Bi-directional
                             graph.add_edge(idx_a, idx_b, edge_data);
                             graph.add_edge(idx_b, idx_a, edge_data);
                         }
@@ -117,13 +108,12 @@ impl NavigationGraph {
         })?;
 
         println!("Graph built: {} nodes, {} edges", graph.node_count(), graph.edge_count());
-        Ok(Self { graph, _osm_id_map:  osm_id_map })
+        Ok(Self { graph }) 
     }
 
     pub fn find_nearest_node(&self, lat: f64, lon: f64) -> Option<NodeIndex> {
         let target = Point::new(lon, lat);
         
-        // Simple linear scan (Optimizable with R-Tree)
         self.graph.node_indices()
             .min_by(|&a, &b| {
                 let na = self.graph[a];

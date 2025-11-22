@@ -1,40 +1,57 @@
-use h3o::{LatLng, Resolution, CellIndex};
 use std::collections::HashMap;
 
-// 0.0 = Safe, 1.0 = Dangerous
-pub struct SafetyMap {
-    cells: HashMap<CellIndex, f32>,
-}
+pub struct SafetyMap;
 
 impl SafetyMap {
     pub fn new() -> Self {
-        let mut cells = HashMap::new();
-        
-        // MOCK DATA: Center of Patiala (Leela Bhawan area approx)
-        let center_lat = 30.3398; 
-        let center_lon = 76.3869;
-        
-        // Using Resolution NINE for both creation and query
-        let center = LatLng::new(center_lat, center_lon).unwrap()
-            .to_cell(Resolution::Nine); 
-            
-        // Mark the center as risky (0.9)
-        cells.insert(center, 0.9);
-        
-        // Mark neighbors as moderate (0.4)
-        for neighbor in center.grid_disk::<Vec<_>>(2) { 
-             cells.entry(neighbor).or_insert(0.4);
-        }
-
-        Self { cells }
+        Self
     }
 
-    pub fn get_risk_score(&self, lat: f64, lon: f64) -> f32 {
-        // FIX: Must match the resolution used in new() -> Resolution::Nine
-        let cell = LatLng::new(lat, lon)
-            .expect("Invalid coordinates")
-            .to_cell(Resolution::Nine); 
-            
-        *self.cells.get(&cell).unwrap_or(&0.1)
+    pub fn calculate_edge_risk(&self, tags: &HashMap<&str, &str>) -> f32 {
+        // 1. BASELINE RISK
+        let highway_type = tags.get("highway").copied().unwrap_or("");
+        
+        let mut score: f32 = match highway_type {
+            "pedestrian" | "footway" | "path" | "steps" => 0.1, 
+            "living_street" | "residential" => 0.3, 
+            "service" => 0.5,
+            "tertiary" | "secondary" => 0.7,
+            "primary" | "trunk" => 0.9, 
+            _ => 0.5,
+        };
+
+        // 2. FEATURE WEIGHTS
+        if let Some(lit) = tags.get("lit") {
+            match *lit {
+                "yes" | "24/7" | "automatic" | "good" => score -= 0.2,
+                "no" => score += 0.3,
+                _ => {}
+            }
+        }
+
+        if let Some(sidewalk) = tags.get("sidewalk") {
+            match *sidewalk {
+                "both" | "yes" | "separate" | "left" | "right" => score -= 0.2,
+                "no" | "none" => score += 0.2,
+                _ => {}
+            }
+        }
+
+        if let Some(surface) = tags.get("surface") {
+            match *surface {
+                "paved" | "asphalt" | "concrete" | "paving_stones" => score -= 0.05,
+                "unpaved" | "dirt" | "earth" | "gravel" | "mud" => score += 0.1,
+                _ => {}
+            }
+        }
+
+        if let Some(foot) = tags.get("foot") {
+            if *foot == "designated" {
+                score -= 0.1;
+            }
+        }
+
+        // 3. CLAMPING
+        score.clamp(0.05, 1.0)
     }
 }
