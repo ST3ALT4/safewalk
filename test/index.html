@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Patiala Safe Walk</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        #controls {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: white; padding: 15px; border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            max-width: 300px;
+        }
+        button {
+            background-color: #0078A8; color: white; border: none;
+            padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 10px;
+        }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button:hover:not(:disabled) { background-color: #005f85; }
+        .info { font-size: 13px; color: #555; margin-top: 5px; }
+        .marker-label { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h3 style="margin-top:0">Safe Walk Nav</h3>
+        <div class="info">
+            1. Click map to set <b>Start</b> (Green)<br>
+            2. Click map to set <b>End</b> (Red)<br>
+            3. Adjust Safety & Go
+        </div>
+        
+        <div style="margin-top:15px">
+            <label>Safety Priority: <span id="alpha-val" style="font-weight:bold">2.0</span></label>
+            <input type="range" id="alpha" min="0" max="10" value="2" step="0.5" style="width:100%">
+        </div>
+
+        <button id="calcBtn" onclick="getRoute()" disabled>Select Points First</button>
+        <button onclick="resetMap()" style="background-color: #666; margin-top:5px;">Reset</button>
+        
+        <div id="status" style="margin-top:10px; font-size:13px; color:#333; border-top:1px solid #eee; padding-top:5px;">Waiting for input...</div>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        // 1. Initialize Map
+        const map = L.map('map').setView([30.3400, 76.3800], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        // Slider Logic
+        document.getElementById('alpha').oninput = function() {
+            document.getElementById('alpha-val').innerText = this.value;
+        }
+
+        // State Variables
+        let startMarker = null;
+        let endMarker = null;
+        let routeLayer = null;
+
+        // 2. Map Click Handler
+        map.on('click', function(e) {
+            if (!startMarker) {
+                // Set Start (Green)
+                startMarker = L.marker(e.latlng, {
+                    icon: createIcon('green')
+                }).addTo(map).bindPopup("Start").openPopup();
+            } else if (!endMarker) {
+                // Set End (Red)
+                endMarker = L.marker(e.latlng, {
+                    icon: createIcon('red')
+                }).addTo(map).bindPopup("Destination").openPopup();
+                
+                // Enable button
+                document.getElementById('calcBtn').disabled = false;
+                document.getElementById('calcBtn').innerText = "Find Safe Path";
+            } else {
+                // If both exist, restart selection
+                resetMap();
+                // Immediately set start to new click
+                startMarker = L.marker(e.latlng, {
+                    icon: createIcon('green')
+                }).addTo(map).bindPopup("Start").openPopup();
+            }
+        });
+
+        // 3. Calculate Route API Call
+        async function getRoute() {
+            if (!startMarker || !endMarker) return;
+
+            const status = document.getElementById('status');
+            status.innerText = "Calculating...";
+            
+            const payload = {
+                origin: [startMarker.getLatLng().lat, startMarker.getLatLng().lng],
+                destination: [endMarker.getLatLng().lat, endMarker.getLatLng().lng],
+                alpha: parseFloat(document.getElementById('alpha').value)
+            };
+
+            try {
+                const response = await fetch('http://localhost:3000/route', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (routeLayer) map.removeLayer(routeLayer);
+
+                if (data.geometry.coordinates.length === 0) {
+                    status.innerText = "❌ No path found. Try points closer to roads.";
+                    return;
+                }
+
+                // Draw Route
+                routeLayer = L.geoJSON(data.geometry, {
+                    style: { color: 'blue', weight: 5, opacity: 0.7 }
+                }).addTo(map);
+
+                map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+                status.innerHTML = `<b>Distance:</b> ${(data.total_distance / 1000).toFixed(2)} km<br><b>Avg Risk:</b> ${data.average_safety.toFixed(2)}`;
+
+            } catch (e) {
+                console.error(e);
+                status.innerText = "Error connecting to Rust API";
+            }
+        }
+
+        function resetMap() {
+            if (startMarker) map.removeLayer(startMarker);
+            if (endMarker) map.removeLayer(endMarker);
+            if (routeLayer) map.removeLayer(routeLayer);
+            startMarker = null;
+            endMarker = null;
+            routeLayer = null;
+            document.getElementById('calcBtn').disabled = true;
+            document.getElementById('calcBtn').innerText = "Select Points First";
+            document.getElementById('status').innerText = "Map reset.";
+        }
+
+        // Helper for colored markers
+        function createIcon(color) {
+            return new L.Icon({
+                iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${color}.png`,
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41]
+            });
+        }
+    </script>
+</body>
+</html>
